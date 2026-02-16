@@ -165,6 +165,19 @@ async def slack_oauth_callback(request: Request):
             algorithm="HS256",
         )
 
+    # Redirect through local endpoint so cookie is set on localhost domain
+    # (ngrok domain cookie won't be sent to localhost:8000 API calls)
+    local_api = "http://localhost:8000"
+    response = RedirectResponse(
+        url=f"{local_api}/auth/set-session?token={token}"
+    )
+
+    log.info("oauth_complete", team_id=team_id, user_id=user_slack_id)
+    return response
+
+
+@router.get("/set-session")
+async def set_session(token: str):
     response = RedirectResponse(url=f"{settings.app_url}/dashboard")
     response.set_cookie(
         key="session",
@@ -174,8 +187,6 @@ async def slack_oauth_callback(request: Request):
         samesite="lax",
         max_age=7 * 24 * 3600,
     )
-
-    log.info("oauth_complete", team_id=team_id, user_id=user_slack_id)
     return response
 
 

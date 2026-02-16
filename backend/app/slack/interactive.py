@@ -7,6 +7,7 @@ from arq.connections import ArqRedis
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.db.models import Decision, PendingConfirmation
@@ -71,7 +72,9 @@ async def _handle_confirm(
     async with async_session_factory() as session:
         decision = (
             await session.execute(
-                select(Decision).where(Decision.id == uuid.UUID(decision_id))
+                select(Decision)
+                .options(selectinload(Decision.workspace))
+                .where(Decision.id == uuid.UUID(decision_id))
             )
         ).scalar_one_or_none()
 
@@ -79,6 +82,7 @@ async def _handle_confirm(
             log.error("decision_not_found", decision_id=decision_id)
             return
 
+        workspace = decision.workspace
         decision.status = "active"
         decision.confirmed_at = datetime.now(timezone.utc)
         decision.confirmed_by = user_id
@@ -86,8 +90,6 @@ async def _handle_confirm(
         await session.refresh(decision)
 
         log.info("decision_confirmed", decision_id=decision_id, user_id=user_id)
-
-        workspace = decision.workspace
         if workspace and workspace.bot_access_token:
             blocks = build_confirmed_blocks(decision)
             await slack_client.update_message(
@@ -108,7 +110,9 @@ async def _handle_edit(decision_id: str, payload: dict) -> None:
     async with async_session_factory() as session:
         decision = (
             await session.execute(
-                select(Decision).where(Decision.id == uuid.UUID(decision_id))
+                select(Decision)
+                .options(selectinload(Decision.workspace))
+                .where(Decision.id == uuid.UUID(decision_id))
             )
         ).scalar_one_or_none()
 
@@ -191,7 +195,9 @@ async def _handle_ignore(
     async with async_session_factory() as session:
         decision = (
             await session.execute(
-                select(Decision).where(Decision.id == uuid.UUID(decision_id))
+                select(Decision)
+                .options(selectinload(Decision.workspace))
+                .where(Decision.id == uuid.UUID(decision_id))
             )
         ).scalar_one_or_none()
 
@@ -199,13 +205,12 @@ async def _handle_ignore(
             log.error("decision_not_found", decision_id=decision_id)
             return
 
+        workspace = decision.workspace
         decision.status = "ignored"
         await session.commit()
         await session.refresh(decision)
 
         log.info("decision_ignored", decision_id=decision_id, user_id=user_id)
-
-        workspace = decision.workspace
         if workspace and workspace.bot_access_token:
             blocks = build_ignored_blocks(decision)
             await slack_client.update_message(

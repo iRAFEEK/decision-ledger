@@ -24,12 +24,12 @@ WITH vector_results AS (
         source_channel_name,
         created_at,
         decision_made_at,
-        (1 - (embedding <=> :query_embedding::vector)) AS vector_score
+        (1 - (embedding <=> CAST(:query_embedding AS vector))) AS vector_score
     FROM decisions
-    WHERE workspace_id = :workspace_id
+    WHERE workspace_id = CAST(:workspace_id AS uuid)
       AND status = 'active'
       AND embedding IS NOT NULL
-    ORDER BY embedding <=> :query_embedding::vector
+    ORDER BY embedding <=> CAST(:query_embedding AS vector)
     LIMIT 20
 ),
 keyword_results AS (
@@ -49,7 +49,7 @@ keyword_results AS (
         decision_made_at,
         ts_rank(search_vector, plainto_tsquery('english', :query)) AS keyword_score
     FROM decisions
-    WHERE workspace_id = :workspace_id
+    WHERE workspace_id = CAST(:workspace_id AS uuid)
       AND status = 'active'
       AND search_vector @@ plainto_tsquery('english', :query)
     ORDER BY ts_rank(search_vector, plainto_tsquery('english', :query)) DESC
@@ -72,7 +72,7 @@ combined AS (
         COALESCE(v.decision_made_at, k.decision_made_at) AS decision_made_at,
         COALESCE(v.vector_score, 0.0) AS vector_score,
         COALESCE(k.keyword_score, 0.0) AS keyword_score,
-        CASE WHEN v.tags && :query_tags::varchar[] THEN 1.0 ELSE 0.0 END AS tag_bonus
+        CASE WHEN v.tags && CAST(:query_tags AS varchar[]) THEN 1.0 ELSE 0.0 END AS tag_bonus
     FROM vector_results v
     FULL OUTER JOIN keyword_results k ON v.id = k.id
 )
@@ -83,11 +83,11 @@ SELECT
     (0.6 * vector_score + 0.3 * keyword_score + 0.1 * tag_bonus) AS combined_score
 FROM combined
 WHERE 1=1
-  AND (:date_from::timestamptz IS NULL OR created_at >= :date_from::timestamptz)
-  AND (:date_to::timestamptz IS NULL OR created_at <= :date_to::timestamptz)
-  AND (:owner_filter::varchar IS NULL OR owner_slack_id = :owner_filter::varchar)
-  AND (:categories::varchar[] IS NULL OR category = ANY(:categories::varchar[]))
-  AND (:filter_tags::varchar[] IS NULL OR tags && :filter_tags::varchar[])
+  AND (CAST(:date_from AS timestamptz) IS NULL OR created_at >= CAST(:date_from AS timestamptz))
+  AND (CAST(:date_to AS timestamptz) IS NULL OR created_at <= CAST(:date_to AS timestamptz))
+  AND (CAST(:owner_filter AS varchar) IS NULL OR owner_slack_id = CAST(:owner_filter AS varchar))
+  AND (CAST(:categories AS varchar[]) IS NULL OR category = ANY(CAST(:categories AS varchar[])))
+  AND (CAST(:filter_tags AS varchar[]) IS NULL OR tags && CAST(:filter_tags AS varchar[]))
 ORDER BY combined_score DESC
 LIMIT :result_limit
 """)

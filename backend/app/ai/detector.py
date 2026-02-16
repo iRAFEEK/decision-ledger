@@ -1,4 +1,6 @@
+
 import json
+import re
 
 import structlog
 from anthropic import AsyncAnthropic
@@ -37,6 +39,10 @@ async def detect_decision(messages: list[dict]) -> dict:
             messages=[{"role": "user", "content": conversation}],
         )
         raw = response.content[0].text.strip()
+        # Strip markdown code fences if present
+        fence = re.match(r"^```(?:json)?\s*\n?(.*?)\n?```$", raw, re.DOTALL)
+        if fence:
+            raw = fence.group(1).strip()
         result = json.loads(raw)
         return {
             "is_decision": bool(result.get("is_decision", False)),

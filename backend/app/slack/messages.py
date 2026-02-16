@@ -107,7 +107,7 @@ def build_ignored_blocks(decision: Decision) -> list[dict]:
 
 
 def build_search_result_blocks(
-    answer: str, decisions: list[Decision]
+    answer: str, decisions: list[dict]
 ) -> list[dict]:
     blocks: list[dict] = [
         {
@@ -119,10 +119,13 @@ def build_search_result_blocks(
     if decisions:
         blocks.append({"type": "divider"})
         for d in decisions[:5]:
-            tags_text = ", ".join(d.tags) if d.tags else ""
-            line = f"*{d.title}*"
-            if d.summary:
-                line += f"\n{d.summary[:200]}"
+            tags = d.get("tags") or []
+            tags_text = ", ".join(tags) if tags else ""
+            title = d.get("title", "Untitled")
+            summary = d.get("summary") or ""
+            line = f"*{title}*"
+            if summary:
+                line += f"\n{summary[:200]}"
             if tags_text:
                 line += f"\n_Tags: {tags_text}_"
             blocks.append(
