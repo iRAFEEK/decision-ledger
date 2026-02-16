@@ -22,7 +22,11 @@
       "Bash(1 echo -e \"\\\\n## Database Indexes\" /usr/local/bin/docker exec project-postgres-1 psql -U postgres -d decision_ledger -c \"\\\\di\" 2)",
       "Bash(1 echo -e \"\\\\n## Project File Tree\" find backend/app -type f -name \"*.py\")",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)"
     ]
   }
 }
