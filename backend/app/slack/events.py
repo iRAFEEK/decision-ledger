@@ -37,7 +37,12 @@ async def slack_events(request: Request) -> Response:
     team_id = payload.get("team_id")
 
     if event.get("type") == "message":
-        if event.get("bot_id") or event.get("subtype"):
+        subtype = event.get("subtype")
+        is_huddle = subtype == "huddle_thread"
+
+        if event.get("bot_id"):
+            return Response(status_code=200)
+        if subtype and not is_huddle:
             return Response(status_code=200)
 
         async with async_session_factory() as session:
@@ -90,6 +95,7 @@ async def slack_events(request: Request) -> Response:
                 user_slack_id=event.get("user"),
                 text=event.get("text", ""),
                 message_ts=message_ts,
+                source_hint="huddle" if is_huddle else None,
                 processed=False,
             )
             session.add(raw_msg)

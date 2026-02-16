@@ -33,12 +33,16 @@ External Integrations: Jira, GitHub (reference enrichment)
 
 ### Processing Pipeline
 
-1. Slack message event received via webhook
-2. arq worker runs Claude-based decision detection
-3. If a decision is detected, Claude extracts structured fields (title, summary, rationale, owner, tags, category)
+1. Slack message event received via webhook (typed messages and Huddle transcripts)
+2. arq worker runs Claude-based decision detection (with huddle-specific prompts for voice conversations)
+3. If a decision is detected, Claude extracts structured fields (title, summary, rationale, owner, tags, category, participants)
 4. Voyage AI generates embeddings for vector search
 5. Jira/GitHub references are enriched with metadata
 6. Decisions are searchable via hybrid search (vector + full-text + tags)
+
+### Huddle Support
+
+When a Slack Huddle ends, its transcript is posted to the channel. Decision Ledger processes these transcripts using specialized AI prompts tuned for spoken conversation patterns — detecting verbal agreements, consensus-building, and action items. Huddle-sourced decisions include participant information and are displayed with a headphones icon in the dashboard.
 
 ## Prerequisites
 

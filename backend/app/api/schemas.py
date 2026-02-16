@@ -17,6 +17,7 @@ class DecisionOut(BaseModel):
     source_url: str | None = None
     source_channel_id: str | None = None
     source_channel_name: str | None = None
+    participants: list[str] | None = None
     tags: list[str] | None = None
     impact_area: list[str] | None = None
     category: str | None = None

@@ -36,7 +36,7 @@ def _format_conversation(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def extract_decision(messages: list[dict]) -> dict:
+async def extract_decision(messages: list[dict], system_prompt: str | None = None) -> dict:
     if not messages:
         return {**EMPTY_EXTRACTION}
 
@@ -46,7 +46,7 @@ async def extract_decision(messages: list[dict]) -> dict:
         response = await _client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=1024,
-            system=DECISION_EXTRACTION_SYSTEM_PROMPT,
+            system=system_prompt or DECISION_EXTRACTION_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": conversation}],
         )
         raw = response.content[0].text.strip()
@@ -76,6 +76,7 @@ async def extract_decision(messages: list[dict]) -> dict:
             "referenced_tickets": result.get("referenced_tickets") or [],
             "referenced_prs": result.get("referenced_prs") or [],
             "referenced_urls": result.get("referenced_urls") or [],
+            "participants": result.get("participants") or [],
         }
     except json.JSONDecodeError:
         log.warning("extractor_json_parse_error", raw=raw[:200])

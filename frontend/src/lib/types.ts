@@ -10,8 +10,10 @@ export interface Decision {
   impact_area: string[] | null;
   status: string;
   confidence: number | null;
+  source_type: string | null;
   source_url: string | null;
   source_channel_name: string | null;
+  participants: string[] | null;
   created_at: string;
   confirmed_at: string | null;
   confirmed_by: string | null;

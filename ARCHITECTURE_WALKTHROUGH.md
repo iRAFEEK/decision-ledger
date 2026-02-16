@@ -5,9 +5,9 @@
 Decision Ledger is an AI-powered system that passively captures engineering decisions from Slack conversations, extracts structured metadata, and makes them searchable via natural language. It solves the problem of institutional knowledge loss — the "why did we choose X?" questions that plague engineering teams months after a decision was made in a Slack thread nobody can find.
 
 The core loop:
-1. A Slack message arrives in a monitored channel
+1. A Slack message arrives in a monitored channel (including Huddle transcripts)
 2. Claude determines if it contains a commitment-level decision (not a question, not speculation)
-3. If yes, Claude extracts structured fields: title, summary, rationale, owner, tags, category
+3. If yes, Claude extracts structured fields: title, summary, rationale, owner, tags, category, participants (for huddles)
 4. The decision is posted back to Slack with Confirm/Edit/Ignore buttons
 5. Once confirmed, Voyage AI generates embeddings and Jira/GitHub references are enriched
 6. Engineers can search decisions via `/decision <query>` in Slack or the web dashboard
@@ -23,7 +23,7 @@ When a message is posted in a Slack channel, Slack's Event Subscriptions deliver
 **`backend/app/slack/events.py:17-92`** — `slack_events()` handles the request:
 - Lines 19-26: Reads the raw body, extracts `X-Slack-Request-Timestamp` and `X-Slack-Signature` headers, verifies HMAC signature via `verify_slack_signature()` (`backend/app/slack/verify.py:6-18`). The signature is `v0=HMAC-SHA256(signing_secret, "v0:{timestamp}:{body}")`. Requests older than 5 minutes are rejected (line 12).
 - Lines 30-34: Handles Slack's `url_verification` challenge (required during app setup — Slack sends a challenge string, you echo it back).
-- Lines 39-41: Filters out bot messages and subtypes (edits, joins, etc.) to avoid processing non-human messages.
+- Lines 39-44: Filters out bot messages and most subtypes (edits, joins, etc.) to avoid processing non-human messages. However, `huddle_thread` subtypes are allowed through — when a Slack Huddle ends, its transcript is posted as a message with `subtype: "huddle_thread"`. For huddle messages, `source_hint="huddle"` is set on the `RawMessage` to signal downstream processing to use huddle-specific AI prompts.
 - Lines 43-66: Looks up the workspace by `team_id`, then checks if the message's channel is in `monitored_channels` with `enabled=True`. If either lookup fails, returns 200 (Slack requires 200 even for ignored events).
 - Lines 68-80: Creates a `RawMessage` record with the message text, user ID, channel ID, thread timestamp, and `processed=False`.
 - Line 90: **Currently commented out** — `await arq_pool.enqueue_job("process_message", str(raw_msg.id))`. This would enqueue the message for AI processing. The arq pool is not yet wired into the FastAPI lifespan.
@@ -40,11 +40,12 @@ When a message is posted in a Slack channel, Slack's Event Subscriptions deliver
 
 ### Step 3: AI Detection
 
-- Line 90: Calls `detect_decision(formatted)` (`backend/app/ai/detector.py:26-51`).
-  - Lines 30-31: `_format_conversation()` turns the message list into `[timestamp] name: text` format.
-  - Lines 33-39: Sends to Claude Sonnet (`claude-sonnet-4-5-20250929`) with `DECISION_DETECTION_SYSTEM_PROMPT` (`backend/app/ai/prompts.py:1-28`). Max 512 tokens.
-  - Lines 40-45: Parses JSON response: `{is_decision: bool, confidence: float, reasoning: str}`.
-  - Lines 46-48: If JSON parsing fails, returns `confidence=0.0` with the raw text in reasoning.
+- Line 90: Calls `detect_decision(formatted, system_prompt=...)` (`backend/app/ai/detector.py:28-57`).
+  - For regular messages, uses `DECISION_DETECTION_SYSTEM_PROMPT`. For huddle transcripts (detected via `raw_msg.source_hint == "huddle"`), uses `HUDDLE_DECISION_DETECTION_SYSTEM_PROMPT` which is tuned for spoken conversation patterns (verbal agreements, consensus-building, action items).
+  - `_format_conversation()` turns the message list into `[timestamp] name: text` format.
+  - Sends to Claude Sonnet (`claude-sonnet-4-5-20250929`). Max 512 tokens.
+  - Parses JSON response: `{is_decision: bool, confidence: float, reasoning: str}`.
+  - If JSON parsing fails, returns `confidence=0.0` with the raw text in reasoning.
 
 - Lines 92-96 (tasks.py): If `confidence < 0.7`, marks the message as processed and returns. This threshold means only high-confidence detections proceed.
 
@@ -52,14 +53,15 @@ When a message is posted in a Slack channel, Slack's Event Subscriptions deliver
 
 ### Step 4: AI Extraction
 
-- Line 115: Calls `extract_decision(formatted)` (`backend/app/ai/extractor.py:38-80`).
-  - Lines 45-50: Sends the same formatted conversation to Claude with `DECISION_EXTRACTION_SYSTEM_PROMPT` (`backend/app/ai/prompts.py:30-53`). Max 1024 tokens.
-  - Lines 54-57: Validates `category` against the fixed set of 11 values. Invalid categories become `None`.
-  - Lines 62-74: Returns structured dict with `title` (truncated to 100 chars), `summary`, `rationale`, `owner_slack_id`, `owner_name`, `tags`, `category`, `impact_area`, `referenced_tickets`, `referenced_prs`, `referenced_urls`.
+- Line 115: Calls `extract_decision(formatted, system_prompt=...)` (`backend/app/ai/extractor.py:39-86`).
+  - For regular messages, uses `DECISION_EXTRACTION_SYSTEM_PROMPT`. For huddle transcripts, uses `HUDDLE_DECISION_EXTRACTION_SYSTEM_PROMPT` which also extracts `participants` (all speakers in the huddle).
+  - Sends the formatted conversation to Claude. Max 1024 tokens.
+  - Validates `category` against the fixed set of 11 values. Invalid categories become `None`.
+  - Returns structured dict with `title` (truncated to 100 chars), `summary`, `rationale`, `owner_slack_id`, `owner_name`, `tags`, `category`, `impact_area`, `referenced_tickets`, `referenced_prs`, `referenced_urls`, `participants`.
 
 ### Step 5: Create the Decision record
 
-- Lines 117-138 (tasks.py): Creates a `Decision` ORM object with all extracted fields, `status="pending"`, `source_type="slack_thread"`, and stores the raw thread messages as JSON in `raw_context`.
+- Lines 117-138 (tasks.py): Creates a `Decision` ORM object with all extracted fields, `status="pending"`, `source_type="slack_thread"` (or `"huddle"` for huddle transcripts), `participants` (for huddles), and stores the raw thread messages as JSON in `raw_context`.
 
 ### Step 6: Create PendingConfirmation and post to Slack
 
@@ -152,7 +154,9 @@ When a message is posted in a Slack channel, Slack's Event Subscriptions deliver
 **Purpose:** Binary classification — is this conversation a decision or not?
 
 - Model: `claude-sonnet-4-5-20250929` (line 34)
-- System prompt (`prompts.py:1-28`): Defines what IS a decision (commitment to an approach, finalized design choice, deprecation announcement, dependency selection, process change) vs what is NOT (questions, speculation, status updates, social chat, suggestions without commitment, existing behavior descriptions).
+- Accepts optional `system_prompt` parameter to override the default prompt.
+- Default system prompt (`prompts.py:1-28`): Defines what IS a decision (commitment to an approach, finalized design choice, deprecation announcement, dependency selection, process change) vs what is NOT (questions, speculation, status updates, social chat, suggestions without commitment, existing behavior descriptions).
+- Huddle prompt (`prompts.py` `HUDDLE_DECISION_DETECTION_SYSTEM_PROMPT`): Adapted for spoken conversation — detects verbal agreements ("yeah let's go with that"), consensus-building, and action items with decisions baked in.
 - Output: `{is_decision: bool, confidence: float [0.0-1.0], reasoning: str}`
 - Confidence guidance: >= 0.8 for clear commitments, 0.5-0.7 for ambiguous, < 0.5 for unlikely.
 - The pipeline uses 0.7 as the threshold (`tasks.py:92`).
@@ -162,14 +166,16 @@ When a message is posted in a Slack channel, Slack's Event Subscriptions deliver
 **Purpose:** Given a conversation that IS a decision, extract structured fields.
 
 - Same model, higher token limit (1024 vs 512).
-- System prompt (`prompts.py:30-53`): Detailed rules per field:
+- Accepts optional `system_prompt` parameter to override the default prompt.
+- Default system prompt (`prompts.py:30-53`): Detailed rules per field:
   - `title`: Imperative style, max 100 chars. "Use PostgreSQL for event store" not "Database discussion".
   - `tags`: Lowercase hyphenated, 2-5 tags.
   - `category`: Must be one of 11 values (architecture, schema, api, infrastructure, deprecation, dependency, naming, process, security, performance, tooling).
   - `impact_area`: Specific system parts affected.
   - Also extracts `referenced_tickets`, `referenced_prs`, `referenced_urls` directly from conversation text.
-- Line 63: Title is hard-truncated to 100 characters.
-- Lines 54-60: Category validation — if Claude returns an invalid category, it becomes `None`.
+- Huddle prompt (`prompts.py` `HUDDLE_DECISION_EXTRACTION_SYSTEM_PROMPT`): Same extraction rules but additionally extracts `participants` — all speakers in the huddle conversation.
+- Title is hard-truncated to 100 characters.
+- Category validation — if Claude returns an invalid category, it becomes `None`.
 
 ### Embeddings (`backend/app/ai/embeddings.py`)
 
@@ -449,7 +455,8 @@ Which Slack channels the bot watches.
 The core table. Every detected engineering decision.
 - **Content:** `title`, `summary`, `rationale`.
 - **Ownership:** `owner_slack_id`, `owner_name`.
-- **Source:** `source_type` (slack_thread, backfill), `source_channel_id`, `source_channel_name`, `source_thread_ts`, `source_url`.
+- **Source:** `source_type` (slack_thread, huddle, backfill), `source_channel_id`, `source_channel_name`, `source_thread_ts`, `source_url`.
+- **Participants:** `participants` (varchar[]) — for huddle-sourced decisions, lists all speakers who were part of the call.
 - **Classification:** `tags` (varchar[]), `impact_area` (varchar[]), `category` (varchar).
 - **AI:** `confidence` (float), `embedding` (Vector(1024)), `raw_context` (JSON — original messages).
 - **Lifecycle:** `status` (pending → active/ignored/expired/deleted), `confirmed_at`, `confirmed_by`, `decision_made_at`.
@@ -459,6 +466,7 @@ The core table. Every detected engineering decision.
 - `ix_decisions_workspace_id` — B-tree on `workspace_id`.
 - `ix_decisions_tags` — GIN on `tags` array (supports `&&` overlap and `@>` containment).
 - `ix_decisions_impact_area` — GIN on `impact_area` array.
+- `ix_decisions_participants` — GIN on `participants` array.
 - `ix_decisions_search_vector` — GIN on `search_vector` (full-text search).
 - `ix_decisions_embedding` — IVFFlat on `embedding` with `vector_cosine_ops`, 100 lists (approximate nearest neighbor).
 
@@ -474,6 +482,7 @@ External references attached to decisions.
 ### `raw_messages`
 Every Slack message received from monitored channels.
 - Stores the original text, user, channel, timestamps.
+- `source_hint` (varchar, nullable) — set to `"huddle"` for messages originating from Slack Huddle transcripts. Used by the worker to select huddle-specific AI prompts.
 - `processed` flag prevents re-processing.
 - `decision_id` links to the decision created from this message (nullable — most messages won't produce decisions).
 
@@ -504,3 +513,4 @@ workspaces ─┬─< users
 ```
 
 All tables cascade through `workspace_id` — every record belongs to exactly one workspace, enforcing multi-tenant isolation. The `decisions` table is the hub, with `decision_links`, `raw_messages`, and `pending_confirmations` hanging off it.
+

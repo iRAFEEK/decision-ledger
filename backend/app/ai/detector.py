@@ -25,7 +25,7 @@ def _format_conversation(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def detect_decision(messages: list[dict]) -> dict:
+async def detect_decision(messages: list[dict], system_prompt: str | None = None) -> dict:
     if not messages:
         return {**NO_DECISION, "reasoning": "No messages provided"}
 
@@ -35,7 +35,7 @@ async def detect_decision(messages: list[dict]) -> dict:
         response = await _client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=512,
-            system=DECISION_DETECTION_SYSTEM_PROMPT,
+            system=system_prompt or DECISION_DETECTION_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": conversation}],
         )
         raw = response.content[0].text.strip()

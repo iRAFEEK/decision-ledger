@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from app.ai.detector import detect_decision
 from app.ai.embeddings import generate_embedding
 from app.ai.extractor import extract_decision
+from app.ai.prompts import HUDDLE_DECISION_DETECTION_SYSTEM_PROMPT, HUDDLE_DECISION_EXTRACTION_SYSTEM_PROMPT
 from app.db.models import (
     Decision,
     DecisionLink,
@@ -87,7 +88,12 @@ async def process_message(ctx: dict, message_id: str) -> None:
             for m in thread_messages
         ]
 
-        detection = await detect_decision(formatted)
+        # Determine if this is a huddle transcript
+        is_huddle = raw_msg.source_hint == "huddle"
+        detect_prompt = HUDDLE_DECISION_DETECTION_SYSTEM_PROMPT if is_huddle else None
+        extract_prompt = HUDDLE_DECISION_EXTRACTION_SYSTEM_PROMPT if is_huddle else None
+
+        detection = await detect_decision(formatted, system_prompt=detect_prompt)
 
         if detection["confidence"] < 0.7:
             raw_msg.processed = True
@@ -112,7 +118,7 @@ async def process_message(ctx: dict, message_id: str) -> None:
             log.warning("daily_detection_limit", workspace_id=str(workspace.id), count=daily_count)
             return
 
-        extraction = await extract_decision(formatted)
+        extraction = await extract_decision(formatted, system_prompt=extract_prompt)
 
         decision = Decision(
             id=uuid.uuid4(),
@@ -122,7 +128,7 @@ async def process_message(ctx: dict, message_id: str) -> None:
             rationale=extraction["rationale"],
             owner_slack_id=extraction["owner_slack_id"],
             owner_name=extraction["owner_name"],
-            source_type="slack_thread",
+            source_type="huddle" if is_huddle else "slack_thread",
             source_channel_id=raw_msg.channel_id,
             source_channel_name=monitored.channel_name,
             source_thread_ts=thread_ts,
@@ -130,6 +136,7 @@ async def process_message(ctx: dict, message_id: str) -> None:
             impact_area=extraction["impact_area"],
             category=extraction["category"],
             confidence=detection["confidence"],
+            participants=extraction.get("participants") or None,
             status="pending",
             raw_context={"messages": [m.get("text", "") for m in thread_messages]},
             decision_made_at=datetime.now(timezone.utc),

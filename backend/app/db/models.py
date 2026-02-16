@@ -95,6 +95,7 @@ class Decision(Base):
         Index("ix_decisions_impact_area", "impact_area", postgresql_using="gin"),
         Index("ix_decisions_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_decisions_workspace_id", "workspace_id"),
+        Index("ix_decisions_participants", "participants", postgresql_using="gin"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -117,6 +118,7 @@ class Decision(Base):
     status: Mapped[str] = mapped_column(String, default="pending")
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by: Mapped[str | None] = mapped_column(String)
+    participants = mapped_column(ARRAY(String), nullable=True)
     raw_context = mapped_column(JSON, nullable=True)
     decision_made_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -158,6 +160,7 @@ class RawMessage(Base):
     user_slack_id: Mapped[str | None] = mapped_column(String)
     text: Mapped[str | None] = mapped_column(Text)
     message_ts: Mapped[str | None] = mapped_column(String)
+    source_hint: Mapped[str | None] = mapped_column(String, nullable=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
     decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

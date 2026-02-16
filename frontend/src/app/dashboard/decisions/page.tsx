@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Headphones } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import type { Decision, DecisionDetail, PaginatedDecisions } from "@/lib/types";
 
@@ -152,7 +153,12 @@ export default function DecisionsPage() {
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-medium text-white">{d.title}</h3>
+                  <h3 className="font-medium text-white flex items-center gap-2">
+                    {d.source_type === "huddle" && (
+                      <Headphones className="h-4 w-4 text-purple-400 shrink-0" title="From Huddle" />
+                    )}
+                    {d.title}
+                  </h3>
                   {d.summary && (
                     <p className="mt-1 text-sm text-zinc-400 line-clamp-2">
                       {d.summary}
@@ -200,6 +206,12 @@ export default function DecisionsPage() {
                 {detail.source_channel_name && (
                   <p className="text-xs text-zinc-500">
                     Source: #{detail.source_channel_name}
+                    {detail.source_type === "huddle" && " (Huddle)"}
+                  </p>
+                )}
+                {detail.participants && detail.participants.length > 0 && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Participants: {detail.participants.join(", ")}
                   </p>
                 )}
                 {detail.links.length > 0 && (
