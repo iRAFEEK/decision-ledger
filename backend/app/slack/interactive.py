@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
+from arq.connections import ArqRedis
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -48,12 +49,14 @@ async def slack_interactive(request: Request) -> Response:
         message = payload.get("message", {})
         message_ts = message.get("ts", "")
 
+        arq_pool = request.app.state.arq_pool
+
         if action_id == "confirm_decision":
-            await _handle_confirm(decision_id, user_id, channel_id, message_ts, payload)
+            await _handle_confirm(decision_id, user_id, channel_id, message_ts, arq_pool)
         elif action_id == "edit_decision":
             await _handle_edit(decision_id, payload)
         elif action_id == "ignore_decision":
-            await _handle_ignore(decision_id, user_id, channel_id, message_ts, payload)
+            await _handle_ignore(decision_id, user_id, channel_id, message_ts)
 
     return Response(status_code=200)
 
@@ -63,7 +66,7 @@ async def _handle_confirm(
     user_id: str,
     channel_id: str,
     message_ts: str,
-    payload: dict,
+    arq_pool: ArqRedis,
 ) -> None:
     async with async_session_factory() as session:
         decision = (
@@ -95,9 +98,8 @@ async def _handle_confirm(
                 blocks=blocks,
             )
 
-        # Enqueue enrichment jobs via arq
-        # await arq_pool.enqueue_job("enrich_decision", str(decision.id))
-        # await arq_pool.enqueue_job("generate_embedding", str(decision.id))
+        await arq_pool.enqueue_job("enrich_decision", decision_id)
+        await arq_pool.enqueue_job("generate_embedding_task", decision_id)
 
 
 async def _handle_edit(decision_id: str, payload: dict) -> None:
@@ -185,7 +187,6 @@ async def _handle_ignore(
     user_id: str,
     channel_id: str,
     message_ts: str,
-    payload: dict,
 ) -> None:
     async with async_session_factory() as session:
         decision = (

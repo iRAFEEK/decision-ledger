@@ -1,8 +1,11 @@
 import structlog
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from app.config import settings
+from app.db.models import Workspace
+from app.db.session import async_session_factory
 from app.slack import router
 from app.slack.verify import verify_slack_signature
 
@@ -49,10 +52,19 @@ async def slack_commands(request: Request) -> Response:
         query=text,
     )
 
-    # Enqueue search job via arq
-    # await arq_pool.enqueue_job(
-    #     "process_query", team_id, user_id, channel_id, text, response_url
-    # )
+    # Look up workspace UUID from Slack team_id
+    async with async_session_factory() as session:
+        workspace = (
+            await session.execute(
+                select(Workspace).where(Workspace.slack_team_id == team_id)
+            )
+        ).scalar_one_or_none()
+
+    if workspace:
+        arq_pool = request.app.state.arq_pool
+        await arq_pool.enqueue_job(
+            "process_query", str(workspace.id), text, user_id, response_url
+        )
 
     return JSONResponse(
         {"response_type": "ephemeral", "text": "\U0001f50d Searching decisions..."}

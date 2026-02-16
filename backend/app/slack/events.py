@@ -65,6 +65,22 @@ async def slack_events(request: Request) -> Response:
             if monitored is None:
                 return Response(status_code=200)
 
+            # Deduplicate Slack retries by checking message_ts
+            message_ts = event.get("ts")
+            existing = (
+                await session.execute(
+                    select(RawMessage.id).where(
+                        RawMessage.workspace_id == workspace.id,
+                        RawMessage.channel_id == channel_id,
+                        RawMessage.message_ts == message_ts,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if existing is not None:
+                log.info("duplicate_message_skipped", message_ts=message_ts)
+                return Response(status_code=200)
+
             raw_msg = RawMessage(
                 id=uuid.uuid4(),
                 workspace_id=workspace.id,
@@ -73,7 +89,7 @@ async def slack_events(request: Request) -> Response:
                 thread_ts=event.get("thread_ts"),
                 user_slack_id=event.get("user"),
                 text=event.get("text", ""),
-                message_ts=event.get("ts"),
+                message_ts=message_ts,
                 processed=False,
             )
             session.add(raw_msg)
@@ -86,7 +102,7 @@ async def slack_events(request: Request) -> Response:
                 message_id=str(raw_msg.id),
             )
 
-            # Enqueue for AI processing via arq
-            # await arq_pool.enqueue_job("process_message", str(raw_msg.id))
+            arq_pool = request.app.state.arq_pool
+            await arq_pool.enqueue_job("process_message", str(raw_msg.id))
 
     return Response(status_code=200)

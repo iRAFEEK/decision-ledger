@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -142,6 +142,7 @@ async def delete_decision(
 @router.post("/decisions/{decision_id}/confirm", response_model=DecisionOut)
 async def confirm_decision(
     decision_id: uuid.UUID,
+    request: Request,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -163,9 +164,9 @@ async def confirm_decision(
     await db.commit()
     await db.refresh(decision)
 
-    # Enqueue enrichment jobs
-    # await arq_pool.enqueue_job("enrich_decision", str(decision.id))
-    # await arq_pool.enqueue_job("generate_embedding_task", str(decision.id))
+    arq_pool = request.app.state.arq_pool
+    await arq_pool.enqueue_job("enrich_decision", str(decision.id))
+    await arq_pool.enqueue_job("generate_embedding_task", str(decision.id))
 
     return DecisionOut.model_validate(decision)
 

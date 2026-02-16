@@ -1,7 +1,7 @@
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -197,6 +197,7 @@ async def configure_github(
 
 @router.post("/workspace/backfill")
 async def trigger_backfill(
+    request: Request,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -217,7 +218,7 @@ async def trigger_backfill(
     workspace.backfill_status = "running"
     await db.commit()
 
-    # Enqueue backfill job
-    # await arq_pool.enqueue_job("backfill_history", str(workspace.id))
+    arq_pool = request.app.state.arq_pool
+    await arq_pool.enqueue_job("backfill_history", str(workspace.id))
 
     return {"status": "started", "workspace_id": str(workspace.id)}

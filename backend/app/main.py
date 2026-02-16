@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
 
 import structlog
+from arq.connections import ArqRedis, RedisSettings, create_pool
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.config import settings
 from app.db.session import async_session_factory, engine
 from app.slack import router as slack_router
 from app.auth import router as auth_router
@@ -31,7 +33,11 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting up")
+    app.state.arq_pool = await create_pool(
+        RedisSettings.from_dsn(settings.redis_url)
+    )
     yield
+    await app.state.arq_pool.close()
     await engine.dispose()
     log.info("shut down")
 
@@ -40,7 +46,7 @@ app = FastAPI(title="Decision Ledger", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[settings.app_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
