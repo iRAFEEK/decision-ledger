@@ -177,3 +177,65 @@ async def slack_oauth_callback(request: Request):
 
     log.info("oauth_complete", team_id=team_id, user_id=user_slack_id)
     return response
+
+
+@router.get("/dev-login")
+async def dev_login():
+    if "localhost" not in settings.app_url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Not found")
+
+    async with async_session_factory() as session:
+        workspace = (
+            await session.execute(
+                select(Workspace).where(Workspace.slack_team_id == "T_DEMO")
+            )
+        ).scalar_one_or_none()
+
+        if workspace is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Demo workspace not found. Run seed_demo.py first.")
+
+        user = (
+            await session.execute(
+                select(User).where(User.workspace_id == workspace.id)
+            )
+        ).scalar_one_or_none()
+
+        if user is None:
+            user = User(
+                id=uuid.uuid4(),
+                workspace_id=workspace.id,
+                slack_user_id="U_DEMO",
+                display_name="Demo User",
+                email="demo@localhost",
+                is_admin=True,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+        token = jwt.encode(
+            {
+                "sub": str(user.id),
+                "workspace_id": str(workspace.id),
+                "slack_user_id": user.slack_user_id,
+                "is_admin": user.is_admin,
+                "exp": datetime.now(timezone.utc) + timedelta(days=7),
+            },
+            settings.jwt_secret,
+            algorithm="HS256",
+        )
+
+    response = RedirectResponse(url=f"{settings.app_url}/dashboard")
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+    )
+
+    log.info("dev_login", workspace_id=str(workspace.id), user_id=str(user.id))
+    return response
