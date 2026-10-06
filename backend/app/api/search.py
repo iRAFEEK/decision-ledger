@@ -24,7 +24,8 @@ async def search_decisions(
         filters = body.filters.model_dump(exclude_none=True)
 
     result = await handle_decision_query(
-        db, workspace_id, body.query, user["slack_user_id"], source="api"
+        db, workspace_id, body.query, user["slack_user_id"], source="api",
+        filters=filters, limit=body.limit, offset=body.offset
     )
 
     decisions = [SearchResultDecision(**d) for d in result["decisions"]]
@@ -32,6 +33,6 @@ async def search_decisions(
     return SearchResponse(
         answer=result["answer"],
         decisions=decisions,
-        total_count=len(decisions),
+        total_count=result["total_count"],
         response_time_ms=result["response_time_ms"],
     )

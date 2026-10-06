@@ -75,11 +75,12 @@ cp backend/.env.example backend/.env
 docker compose -f docker-compose.production.yml up --build
 ```
 
-### 3. Run database migrations
+### 3. Database migrations
+
+The `migrate` service applies migrations before the API and worker start. Its configuration and scripts are included in the backend image. To inspect the current revision:
 
 ```bash
-docker compose -f docker-compose.production.yml exec backend \
-  alembic -c /app/alembic.ini upgrade head
+docker compose -f docker-compose.production.yml exec backend alembic current
 ```
 
 ### 4. Create your Slack App
@@ -162,6 +163,20 @@ Install the app to your workspace. Copy the **Client ID**, **Client Secret**, an
 | `GITHUB_REPO` | No | GitHub repository name |
 | `NEXT_PUBLIC_API_URL` | No | API URL for frontend (default: `http://localhost:8000`) |
 
+## Application addresses and login
+
+`APP_URL` is the frontend origin allowed by CORS. `API_URL` is the browser-reachable backend origin and determines the Slack callback URL. `NEXT_PUBLIC_API_URL` must match that backend origin; it is embedded in the frontend at build time. Never use the container hostname `backend` for the browser URL.
+
+For Docker Compose, put backend settings in `backend/.env` and set the frontend build argument through a root `.env` or the shell:
+
+```bash
+NEXT_PUBLIC_API_URL=https://api.example.com docker compose -f docker-compose.production.yml up --build -d
+```
+
+Supported cookie setups are local HTTP on `localhost` for both services, or HTTPS on the same site (for example `app.example.com` and `api.example.com`). Unrelated frontend/API domains require a same-site reverse proxy; third-party cookie authentication is not supported. If using a tunnel for Slack login, use the tunneled API address consistently in `API_URL`, `NEXT_PUBLIC_API_URL`, and Slack's redirect configuration, and serve the frontend on the same site. Rebuild the frontend after changing its API URL.
+
+OAuth now checks a state cookie and sets the session cookie directly on the callback response. The old token-in-query `/auth/set-session` endpoint is removed. HTTPS API origins receive Secure cookies.
+
 ## Development Setup (without Docker)
 
 ### Backend
@@ -195,10 +210,54 @@ npm run dev
 
 ### Run tests
 
+Self-contained tests require no service credentials:
+
 ```bash
 cd backend
-pytest
+pip install -e ".[dev]"
+pytest -q
 ```
+
+For integration tests, start disposable services from the repository root:
+
+```bash
+docker compose -f docker-compose.test.yml up -d --wait
+cd backend
+export TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:15499/decision_ledger_test
+export TEST_REDIS_URL=redis://localhost:16379
+DATABASE_URL="$TEST_DATABASE_URL" alembic upgrade head
+pytest --integration -q
+```
+
+Only point `TEST_DATABASE_URL` at a disposable database. Tests create and remove unique schemas; Redis jobs use a unique queue. External Slack, Anthropic, and Voyage responses are mocked in these tests. They verify real persistence, queue execution, retrieval, and edits, but do not measure live model quality.
+
+```bash
+# From the repository root, after testing:
+docker compose -f docker-compose.test.yml down
+cd frontend
+npm ci
+npm run lint
+npm run build
+npm audit --omit=dev
+```
+
+GitHub Actions runs these checks plus the production Compose startup and migration smoke check.
+
+### Local demo without Slack credentials
+
+With the API and database configured and migrated, run `DATABASE_URL=... python scripts/seed_demo.py` from `backend`, then open `http://localhost:8000/auth/dev-login`. The seed command preserves existing demo data on subsequent runs. Demo login is available only when `APP_URL` has a loopback hostname. Demo decisions support keyword search without AI keys; they do not include live semantic embeddings.
+
+### Search behavior
+
+Search defaults to active decisions in the current workspace. The API accepts date bounds, owner, categories, tags, and status (`active`, `pending`, `ignored`, `expired`), plus `limit` (1–20) and `offset`. Dates filter `created_at`, bounds are inclusive, and dates without a timezone use UTC. Date-only upper bounds mean midnight; send a timestamp for the end of a whole day.
+
+Filters apply before ranking. Results have deterministic ordering, and `total_count` counts all filtered candidates before pagination, including when the requested page is empty. With an embedding, candidates include vector-bearing decisions plus keyword/tag matches; without one, they are keyword/tag matches only. Exact ranking/counting favors correctness for the current small dataset; large workspaces should benchmark this query before changing it to approximate retrieval.
+
+Voyage is optional: missing credentials or an embedding request failure falls back to keyword/tag retrieval. AI summary failures preserve retrieved decisions and show a readable fallback. Slack edits are allowed for the decision owner or a workspace admin, persist before acknowledgement, and queue slower message and embedding refreshes.
+
+### Dependency audit
+
+Next.js and its matching lint configuration were updated to 16.4.0, along with compatible transitive patches. The October 7, 2026 runtime audit reported zero vulnerabilities. The full audit still reports five high-severity entries along the development-only `braces` → `micromatch` → `fast-glob` → Next lint tooling chain. The suggested forced fix downgrades the Next lint configuration to 14.x; it has not been applied. Recheck upstream fixes before changing that tooling.
 
 ## API Endpoints
 

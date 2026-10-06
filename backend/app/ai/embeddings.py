@@ -9,6 +9,8 @@ VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
 
 
 async def _call_voyage(text: str, input_type: str) -> list[float]:
+    if not settings.voyage_api_key:
+        return []
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(

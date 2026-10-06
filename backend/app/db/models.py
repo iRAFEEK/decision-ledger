@@ -125,7 +125,7 @@ class Decision(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     search_vector = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(rationale, ''))"),
+        Computed("to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(rationale, ''))", persisted=True),
         nullable=True,
     )
 

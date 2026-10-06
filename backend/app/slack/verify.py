@@ -9,7 +9,11 @@ def verify_slack_signature(
     body: bytes,
     signature: str,
 ) -> bool:
-    if abs(time.time() - int(timestamp)) > 60 * 5:
+    try:
+        request_time = int(timestamp)
+    except (ValueError, TypeError):
+        return False
+    if abs(time.time() - request_time) > 60 * 5:
         return False
     basestring = f"v0:{timestamp}:{body.decode()}"
     computed = "v0=" + hmac.new(

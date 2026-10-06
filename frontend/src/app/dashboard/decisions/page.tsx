@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Headphones } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import type { Decision, DecisionDetail, PaginatedDecisions } from "@/lib/types";
@@ -40,29 +40,35 @@ export default function DecisionsPage() {
   const [error, setError] = useState("");
   const perPage = 20;
 
-  const fetchDecisions = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      params.set("page", String(page));
-      params.set("per_page", String(perPage));
-      if (status) params.set("status", status);
-      if (category) params.set("category", category);
-      if (search) params.set("tag", search);
-      const data = await apiGet<PaginatedDecisions>(
-        `/api/decisions?${params.toString()}`
-      );
-      setDecisions(data.items);
-      setTotal(data.total);
-    } catch (e: unknown) {
-      setError((e as Error).message);
-    }
-  }, [page, status, category, search]);
+  const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const detailRequest = useRef(0);
 
   useEffect(() => {
-    fetchDecisions();
-  }, [fetchDecisions]);
+    const controller = new AbortController();
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+    if (status) params.set("status", status);
+    if (category) params.set("category", category);
+    if (search) params.set("tag", search);
+    apiGet<PaginatedDecisions>(`/api/decisions?${params}`, { signal: controller.signal })
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        setDecisions(data.items);
+        setTotal(data.total);
+        setError("");
+      })
+      .catch((e: Error) => {
+        if (!controller.signal.aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [page, status, category, search, revision]);
 
   const toggleExpand = async (id: string) => {
+    const requestId = ++detailRequest.current;
+    setDetail(null);
     if (expanded === id) {
       setExpanded(null);
       setDetail(null);
@@ -71,15 +77,20 @@ export default function DecisionsPage() {
     setExpanded(id);
     try {
       const d = await apiGet<DecisionDetail>(`/api/decisions/${id}`);
-      setDetail(d);
+      if (detailRequest.current === requestId) setDetail(d);
     } catch {
-      setDetail(null);
+      if (detailRequest.current === requestId) setDetail(null);
     }
   };
 
   const handleAction = async (id: string, action: "confirm" | "ignore") => {
-    await apiPost(`/api/decisions/${id}/${action}`);
-    fetchDecisions();
+    try {
+      await apiPost(`/api/decisions/${id}/${action}`);
+      setLoading(true);
+      setRevision((value) => value + 1);
+    } catch (e: unknown) {
+      setError((e as Error).message);
+    }
   };
 
   const totalPages = Math.ceil(total / perPage);
@@ -93,6 +104,7 @@ export default function DecisionsPage() {
         <select
           value={status}
           onChange={(e) => {
+            setLoading(true);
             setStatus(e.target.value);
             setPage(1);
           }}
@@ -109,6 +121,7 @@ export default function DecisionsPage() {
         <select
           value={category}
           onChange={(e) => {
+            setLoading(true);
             setCategory(e.target.value);
             setPage(1);
           }}
@@ -127,6 +140,7 @@ export default function DecisionsPage() {
           placeholder="Filter by tag..."
           value={search}
           onChange={(e) => {
+            setLoading(true);
             setSearch(e.target.value);
             setPage(1);
           }}
@@ -155,7 +169,7 @@ export default function DecisionsPage() {
                 <div className="min-w-0 flex-1">
                   <h3 className="font-medium text-white flex items-center gap-2">
                     {d.source_type === "huddle" && (
-                      <Headphones className="h-4 w-4 text-purple-400 shrink-0" title="From Huddle" />
+                      <span title="From Huddle"><Headphones className="h-4 w-4 text-purple-400 shrink-0" aria-label="From Huddle" /></span>
                     )}
                     {d.title}
                   </h3>
@@ -256,7 +270,8 @@ export default function DecisionsPage() {
           </div>
         ))}
 
-        {decisions.length === 0 && !error && (
+        {loading && <p role="status" className="py-4 text-zinc-400">Loading decisions...</p>}
+        {decisions.length === 0 && !error && !loading && (
           <p className="py-12 text-center text-zinc-500">No decisions found</p>
         )}
       </div>
@@ -265,7 +280,7 @@ export default function DecisionsPage() {
       {totalPages > 1 && (
         <div className="mt-6 flex items-center justify-between">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => { setLoading(true); setPage((p) => Math.max(1, p - 1)); }}
             disabled={page <= 1}
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-40"
           >
@@ -275,7 +290,7 @@ export default function DecisionsPage() {
             Page {page} of {totalPages}
           </span>
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => { setLoading(true); setPage((p) => Math.min(totalPages, p + 1)); }}
             disabled={page >= totalPages}
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-40"
           >

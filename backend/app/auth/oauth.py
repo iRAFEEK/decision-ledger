@@ -1,6 +1,8 @@
 import uuid
+import secrets
+import hmac
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 import structlog
@@ -39,13 +41,19 @@ USER_SCOPES = ",".join([
 
 @router.get("/slack")
 async def slack_oauth_redirect():
+    state = secrets.token_urlsafe(32)
     params = urlencode({
+        "state": state,
         "client_id": settings.slack_client_id,
         "scope": BOT_SCOPES,
         "user_scope": USER_SCOPES,
         "redirect_uri": f"{settings.api_url}/auth/callback",
     })
-    return RedirectResponse(url=f"{SLACK_AUTHORIZE_URL}?{params}")
+    response = RedirectResponse(url=f"{SLACK_AUTHORIZE_URL}?{params}")
+    response.set_cookie("oauth_state", state, httponly=True,
+                        secure=settings.api_url.startswith("https://"),
+                        samesite="lax", max_age=600)
+    return response
 
 
 @router.get("/callback")
@@ -53,6 +61,11 @@ async def slack_oauth_callback(request: Request):
     code = request.query_params.get("code")
     if not code:
         return RedirectResponse(url=f"{settings.app_url}?error=missing_code")
+
+    state = request.query_params.get("state", "")
+    expected = request.cookies.get("oauth_state", "")
+    if not expected or not hmac.compare_digest(state, expected):
+        return RedirectResponse(url=f"{settings.app_url}?error=invalid_state")
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
@@ -165,34 +178,27 @@ async def slack_oauth_callback(request: Request):
             algorithm="HS256",
         )
 
-    # Redirect through local endpoint so cookie is set on localhost domain
-    # (ngrok domain cookie won't be sent to localhost:8000 API calls)
-    local_api = "http://localhost:8000"
-    response = RedirectResponse(
-        url=f"{local_api}/auth/set-session?token={token}"
-    )
-
+    response = _session_response(token)
+    response.delete_cookie("oauth_state", secure=settings.api_url.startswith("https://"),
+                           httponly=True, samesite="lax")
     log.info("oauth_complete", team_id=team_id, user_id=user_slack_id)
     return response
 
 
-@router.get("/set-session")
-async def set_session(token: str):
-    response = RedirectResponse(url=f"{settings.app_url}/dashboard")
+def _session_response(token: str) -> RedirectResponse:
+    # Set the cookie on the API origin that serves the callback. No JWT in a URL.
+    response = RedirectResponse(url=f"{settings.app_url.rstrip('/')}/dashboard")
     response.set_cookie(
-        key="session",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
+        key="session", value=token, httponly=True,
+        secure=settings.api_url.startswith("https://"),
+        samesite="lax", max_age=7 * 24 * 3600,
     )
     return response
 
 
 @router.get("/dev-login")
 async def dev_login():
-    if "localhost" not in settings.app_url:
+    if urlparse(settings.app_url).hostname not in {"localhost", "127.0.0.1", "::1"}:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -238,15 +244,7 @@ async def dev_login():
             algorithm="HS256",
         )
 
-    response = RedirectResponse(url=f"{settings.app_url}/dashboard")
-    response.set_cookie(
-        key="session",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
-    )
+    response = _session_response(token)
 
     log.info("dev_login", workspace_id=str(workspace.id), user_id=str(user.id))
     return response

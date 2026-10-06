@@ -43,6 +43,10 @@ def _format_context(decisions: list[dict]) -> str:
 
 
 async def synthesize_answer(query: str, decisions: list[dict]) -> str:
+    if not decisions:
+        return "I didn't find any recorded decisions on this results page."
+    if not settings.anthropic_api_key:
+        return "The AI summary is unavailable. The matching decisions are listed below."
     context = _format_context(decisions)
     user_message = f"Context — retrieved decisions:\n{context}\n\nQuestion: {query}"
 
@@ -56,4 +60,4 @@ async def synthesize_answer(query: str, decisions: list[dict]) -> str:
         return response.content[0].text.strip()
     except Exception as exc:
         log.error("synthesizer_error", error=str(exc))
-        return "Sorry, I encountered an error while searching decisions. Please try again."
+        return "The AI summary is unavailable. The matching decisions are listed below."

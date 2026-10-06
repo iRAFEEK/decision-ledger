@@ -36,10 +36,12 @@ async def lifespan(app: FastAPI):
     app.state.arq_pool = await create_pool(
         RedisSettings.from_dsn(settings.redis_url)
     )
-    yield
-    await app.state.arq_pool.close()
-    await engine.dispose()
-    log.info("shut down")
+    try:
+        yield
+    finally:
+        await app.state.arq_pool.aclose()
+        await engine.dispose()
+        log.info("shut down")
 
 
 app = FastAPI(title="Decision Ledger", version="0.1.0", lifespan=lifespan)

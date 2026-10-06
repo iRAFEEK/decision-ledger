@@ -1,6 +1,7 @@
 
 import json
 import re
+import math
 
 import structlog
 from anthropic import AsyncAnthropic
@@ -44,9 +45,18 @@ async def detect_decision(messages: list[dict], system_prompt: str | None = None
         if fence:
             raw = fence.group(1).strip()
         result = json.loads(raw)
+        flag = result.get("is_decision")
+        confidence = result.get("confidence")
+        if (
+            type(flag) is not bool
+            or type(confidence) not in (int, float)
+            or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1
+        ):
+            raise ValueError("Invalid decision flag or confidence")
         return {
-            "is_decision": bool(result.get("is_decision", False)),
-            "confidence": float(result.get("confidence", 0.0)),
+            "is_decision": flag,
+            "confidence": float(confidence),
             "reasoning": str(result.get("reasoning", "")),
         }
     except json.JSONDecodeError:

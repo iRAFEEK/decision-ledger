@@ -93,6 +93,7 @@ async def get_decision(
 async def update_decision(
     decision_id: uuid.UUID,
     body: DecisionUpdateIn,
+    request: Request,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -109,11 +110,16 @@ async def update_decision(
         raise HTTPException(status_code=404, detail="Decision not found")
 
     updates = body.model_dump(exclude_unset=True)
+    content_changed = any(field in updates and updates[field] != getattr(decision, field) for field in ("title", "summary", "rationale"))
+    if content_changed:
+        decision.embedding = None
     for field, value in updates.items():
         setattr(decision, field, value)
 
     await db.commit()
     await db.refresh(decision)
+    if content_changed:
+        await request.app.state.arq_pool.enqueue_job("refresh_edited_decision", str(decision.id))
     return DecisionOut.model_validate(decision)
 
 

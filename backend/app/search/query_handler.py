@@ -18,10 +18,14 @@ async def handle_decision_query(
     query_text: str,
     user_slack_id: str,
     source: str = "slack",
+    filters: dict | None = None,
+    limit: int = 5,
+    offset: int = 0,
 ) -> dict:
     start = time.monotonic()
 
-    results = await hybrid_search(db_session, workspace_id, query_text)
+    page = await hybrid_search(db_session, workspace_id, query_text, filters, limit, offset)
+    results = page.decisions
 
     for result in results:
         links = (
@@ -69,5 +73,6 @@ async def handle_decision_query(
     return {
         "answer": answer,
         "decisions": results,
+        "total_count": page.total_count,
         "response_time_ms": elapsed_ms,
     }
