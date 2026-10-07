@@ -100,7 +100,7 @@ def upgrade() -> None:
             "search_vector",
             postgresql.TSVECTOR,
             sa.Computed(
-                "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(rationale, ''))"
+                "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(rationale, ''))", persisted=True
             ),
         ),
     )

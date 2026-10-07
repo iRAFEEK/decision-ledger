@@ -25,7 +25,7 @@ from app.integrations.jira.client import JiraClient
 from app.integrations.jira.references import extract_jira_references
 from app.search.query_handler import handle_decision_query
 from app.slack import client as slack_client
-from app.slack.messages import build_confirmation_blocks, build_search_result_blocks
+from app.slack.messages import build_confirmation_blocks, build_confirmed_blocks, build_search_result_blocks
 
 log = structlog.get_logger()
 
@@ -95,7 +95,7 @@ async def process_message(ctx: dict, message_id: str) -> None:
 
         detection = await detect_decision(formatted, system_prompt=detect_prompt)
 
-        if detection["confidence"] < 0.7:
+        if detection.get("is_decision") is not True or not 0.7 <= detection["confidence"] <= 1.0:
             raw_msg.processed = True
             await session.commit()
             log.info("message_below_threshold", message_id=message_id, confidence=detection["confidence"])
@@ -360,6 +360,10 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                     limit=200,
                     cursor=cursor,
                 )
+                if not resp.get("ok"):
+                    workspace.backfill_status = "failed"
+                    await session.commit()
+                    return
                 messages = resp.get("messages", [])
 
                 for msg in messages:
@@ -367,6 +371,13 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                         continue
 
                     thread_ts = msg.get("thread_ts") or msg.get("ts")
+                    existing = (await session.execute(select(Decision.id).where(
+                        Decision.workspace_id == workspace.id,
+                        Decision.source_channel_id == channel.channel_id,
+                        Decision.source_thread_ts == thread_ts,
+                    ))).first()
+                    if existing:
+                        continue
                     thread_messages = [msg]
 
                     if msg.get("reply_count", 0) > 0:
@@ -377,6 +388,10 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                             thread_ts,
                             limit=50,
                         )
+                        if not thread_resp.get("ok"):
+                            workspace.backfill_status = "failed"
+                            await session.commit()
+                            return
                         thread_messages = thread_resp.get("messages", [msg])
 
                     formatted = [
@@ -390,10 +405,19 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                     ]
 
                     detection = await detect_decision(formatted)
-                    if detection["confidence"] < 0.7:
+                    if detection.get("reasoning", "").startswith(("Error:", "Failed to parse")):
+                        workspace.backfill_status = "failed"
+                        await session.commit()
+                        return
+                    if detection.get("is_decision") is not True or not 0.7 <= detection["confidence"] <= 1.0:
                         continue
 
                     extraction = await extract_decision(formatted)
+
+                    if extraction["title"] == "Untitled Decision" and not extraction.get("summary"):
+                        workspace.backfill_status = "failed"
+                        await session.commit()
+                        return
 
                     decision = Decision(
                         id=uuid.uuid4(),
@@ -437,3 +461,28 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
         workspace.backfill_status = "complete"
         await session.commit()
         log.info("backfill_complete", workspace_id=workspace_id)
+
+
+async def refresh_edited_decision(ctx: dict, decision_id: str) -> None:
+    """Slow edit follow-up runs outside Slack's modal acknowledgement window."""
+    async with async_session_factory() as session:
+        decision = await session.get(Decision, uuid.UUID(decision_id))
+        if decision is None or decision.status not in {"pending", "active"}:
+            return
+        workspace = await session.get(Workspace, decision.workspace_id)
+        confirmations = (await session.execute(select(PendingConfirmation).where(
+            PendingConfirmation.decision_id == decision.id,
+            PendingConfirmation.workspace_id == decision.workspace_id,
+        ))).scalars().all()
+        if workspace and workspace.bot_access_token:
+            blocks = build_confirmed_blocks(decision) if decision.status == "active" else build_confirmation_blocks(decision)
+            for confirmation in confirmations:
+                if confirmation.slack_channel_id and confirmation.slack_message_ts:
+                    response = await slack_client.update_message(
+                        workspace.bot_access_token, confirmation.slack_channel_id,
+                        confirmation.slack_message_ts, text=f"Decision updated: {decision.title}", blocks=blocks,
+                    )
+                    if not response.get("ok"):
+                        log.error("edit_message_refresh_failed", decision_id=decision_id)
+        if decision.status == "active":
+            await generate_embedding_task(ctx, decision_id)

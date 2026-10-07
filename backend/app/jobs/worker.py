@@ -9,6 +9,7 @@ from app.jobs.tasks import (
     generate_embedding_task,
     process_message,
     process_query,
+    refresh_edited_decision,
 )
 
 
@@ -16,6 +17,7 @@ class WorkerSettings:
     functions = [
         process_message,
         process_query,
+        refresh_edited_decision,
         enrich_decision,
         generate_embedding_task,
         backfill_history,

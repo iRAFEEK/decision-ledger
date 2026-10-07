@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- Decisions ---
@@ -67,16 +68,34 @@ class PaginatedDecisions(BaseModel):
 # --- Search ---
 
 class SearchFilters(BaseModel):
-    date_from: str | None = None
-    date_to: str | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
     owner_slack_id: str | None = None
     categories: list[str] | None = None
     tags: list[str] | None = None
-    status: str | None = None
+    status: Literal["active", "pending", "ignored", "expired"] | None = None
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def normalize_date(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value and value.tzinfo is None else value
+
+    @model_validator(mode="after")
+    def ordered_dates(self):
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        return self
+
 
 
 class SearchRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def strip_query(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
     filters: SearchFilters | None = None
     limit: int = Field(default=5, ge=1, le=20)
     offset: int = Field(default=0, ge=0)
