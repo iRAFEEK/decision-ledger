@@ -3,6 +3,7 @@ from anthropic import AsyncAnthropic
 
 from app.ai.prompts import ANSWER_SYNTHESIS_SYSTEM_PROMPT
 from app.config import settings
+from app.ai import gemini
 
 log = structlog.get_logger()
 
@@ -45,19 +46,22 @@ def _format_context(decisions: list[dict]) -> str:
 async def synthesize_answer(query: str, decisions: list[dict]) -> str:
     if not decisions:
         return "I didn't find any recorded decisions on this results page."
-    if not settings.anthropic_api_key:
+    if not gemini.enabled() and not settings.anthropic_api_key:
         return "The AI summary is unavailable. The matching decisions are listed below."
     context = _format_context(decisions)
     user_message = f"Context — retrieved decisions:\n{context}\n\nQuestion: {query}"
 
     try:
-        response = await _client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=1024,
-            system=ANSWER_SYNTHESIS_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        return response.content[0].text.strip()
+        if gemini.enabled():
+            return await gemini.generate(ANSWER_SYNTHESIS_SYSTEM_PROMPT, user_message)
+        else:
+            response = await _client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=1024,
+                system=ANSWER_SYNTHESIS_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            return response.content[0].text.strip()
     except Exception as exc:
         log.error("synthesizer_error", error=str(exc))
         return "The AI summary is unavailable. The matching decisions are listed below."

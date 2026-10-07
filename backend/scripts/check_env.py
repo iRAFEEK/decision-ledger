@@ -10,7 +10,6 @@ REQUIRED = [
     "SLACK_CLIENT_ID",
     "SLACK_CLIENT_SECRET",
     "SLACK_SIGNING_SECRET",
-    "ANTHROPIC_API_KEY",
     "JWT_SECRET",
 ]
 
@@ -23,6 +22,8 @@ OPTIONAL = [
 
 def main() -> int:
     missing = []
+    if not any(os.environ.get(key) for key in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY")):
+        missing.append("GEMINI_API_KEY or ANTHROPIC_API_KEY")
     print("=== Required Environment Variables ===")
     for var in REQUIRED:
         value = os.environ.get(var)

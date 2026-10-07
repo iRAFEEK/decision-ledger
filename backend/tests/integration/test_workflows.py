@@ -226,3 +226,19 @@ async def test_ingest_confirm_search_edit_and_ignore(database, monkeypatch):
             assert (await client.post('/api/search',json={'query':'redis'})).json()['total_count'] == 0
     finally:
         await pool.aclose()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['slack', 'ai'])
+async def test_backfill_failure_is_not_complete(database, monkeypatch, failure):
+    from app.db.models import Workspace
+    async with database.factory() as session:
+        session.add(MonitoredChannel(workspace_id=database.workspace.id, channel_id='C_SCAN'))
+        await session.commit()
+    response = {'ok': False, 'error': 'not_in_channel'} if failure == 'slack' else {'ok': True, 'messages': [{'ts': '123', 'text': 'We chose Postgres', 'user': 'U_TEST'}]}
+    monkeypatch.setattr(tasks.slack_client, 'conversations_history', AsyncMock(return_value=response))
+    monkeypatch.setattr(tasks, 'detect_decision', AsyncMock(return_value={'is_decision': False, 'confidence': 0, 'reasoning': 'Error: Gemini unavailable'}))
+    await tasks.backfill_history({}, str(database.workspace.id))
+    async with database.factory() as session:
+        workspace = await session.get(Workspace, database.workspace.id)
+        assert workspace.backfill_status == 'failed'
+        assert await session.scalar(select(func.count()).select_from(Decision)) == 0

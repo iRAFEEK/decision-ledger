@@ -149,7 +149,9 @@ Install the app to your workspace. Copy the **Client ID**, **Client Secret**, an
 | `SLACK_CLIENT_ID` | Yes | Slack app client ID |
 | `SLACK_CLIENT_SECRET` | Yes | Slack app client secret |
 | `SLACK_SIGNING_SECRET` | Yes | Slack request signing secret |
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude |
+| `GEMINI_API_KEY` | Either AI key | Gemini key; takes priority when configured |
+| `GEMINI_MODEL` | No | Defaults to `gemini-3.8-flash` |
+| `ANTHROPIC_API_KEY` | Either AI key | Claude alternative when Gemini is not configured |
 | `JWT_SECRET` | Yes | Secret for signing JWT tokens |
 | `ENCRYPTION_KEY` | No | Key for encrypting stored credentials |
 | `VOYAGE_API_KEY` | No | Voyage AI key for embeddings |
@@ -310,3 +312,9 @@ Next.js and its matching lint configuration were updated to 16.4.0, along with c
 | `POST` | `/api/workspace/integrations/jira` | Configure Jira integration |
 | `POST` | `/api/workspace/integrations/github` | Configure GitHub integration |
 | `POST` | `/api/workspace/backfill` | Trigger channel history backfill |
+
+### Gemini and channel setup
+
+Create a Gemini key in Google AI Studio and set `GEMINI_API_KEY` in `backend/.env` (or the host secret settings). Restart both API and worker after changing keys. Detection, extraction, and summaries use Gemini; Voyage embeddings remain optional, with keyword search available without them. Never commit `.env`.
+
+After Slack installation, invite the bot to the desired channel and add its channel ID (the final `C...` segment of the Slack URL) under Settings → Monitored Channels. The name is optional. Run History Backfill to scan existing engineering decisions. Live messages require Slack Event Subscriptions pointing to the publicly reachable `/slack/events` endpoint, plus interactive callbacks at `/slack/interactive`. Temporary Gemini HTTP failures are retried; Slack and AI failures mark backfill as failed rather than complete. Repeated backfills skip already saved source threads.

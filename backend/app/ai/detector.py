@@ -8,6 +8,7 @@ from anthropic import AsyncAnthropic
 
 from app.ai.prompts import DECISION_DETECTION_SYSTEM_PROMPT
 from app.config import settings
+from app.ai import gemini
 
 log = structlog.get_logger()
 
@@ -33,13 +34,16 @@ async def detect_decision(messages: list[dict], system_prompt: str | None = None
     conversation = _format_conversation(messages)
 
     try:
-        response = await _client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=512,
-            system=system_prompt or DECISION_DETECTION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": conversation}],
-        )
-        raw = response.content[0].text.strip()
+        if gemini.enabled():
+            raw = await gemini.generate(system_prompt or DECISION_DETECTION_SYSTEM_PROMPT, conversation)
+        else:
+            response = await _client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=512,
+                system=system_prompt or DECISION_DETECTION_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": conversation}],
+            )
+            raw = response.content[0].text.strip()
         # Strip markdown code fences if present
         fence = re.match(r"^```(?:json)?\s*\n?(.*?)\n?```$", raw, re.DOTALL)
         if fence:

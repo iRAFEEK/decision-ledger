@@ -360,6 +360,10 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                     limit=200,
                     cursor=cursor,
                 )
+                if not resp.get("ok"):
+                    workspace.backfill_status = "failed"
+                    await session.commit()
+                    return
                 messages = resp.get("messages", [])
 
                 for msg in messages:
@@ -367,6 +371,13 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                         continue
 
                     thread_ts = msg.get("thread_ts") or msg.get("ts")
+                    existing = (await session.execute(select(Decision.id).where(
+                        Decision.workspace_id == workspace.id,
+                        Decision.source_channel_id == channel.channel_id,
+                        Decision.source_thread_ts == thread_ts,
+                    ))).first()
+                    if existing:
+                        continue
                     thread_messages = [msg]
 
                     if msg.get("reply_count", 0) > 0:
@@ -377,6 +388,10 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                             thread_ts,
                             limit=50,
                         )
+                        if not thread_resp.get("ok"):
+                            workspace.backfill_status = "failed"
+                            await session.commit()
+                            return
                         thread_messages = thread_resp.get("messages", [msg])
 
                     formatted = [
@@ -390,10 +405,19 @@ async def backfill_history(ctx: dict, workspace_id: str, days: int = 90) -> None
                     ]
 
                     detection = await detect_decision(formatted)
+                    if detection.get("reasoning", "").startswith(("Error:", "Failed to parse")):
+                        workspace.backfill_status = "failed"
+                        await session.commit()
+                        return
                     if detection.get("is_decision") is not True or not 0.7 <= detection["confidence"] <= 1.0:
                         continue
 
                     extraction = await extract_decision(formatted)
+
+                    if extraction["title"] == "Untitled Decision" and not extraction.get("summary"):
+                        workspace.backfill_status = "failed"
+                        await session.commit()
+                        return
 
                     decision = Decision(
                         id=uuid.uuid4(),

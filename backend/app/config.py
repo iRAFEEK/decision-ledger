@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     slack_client_secret: str = ""
     slack_signing_secret: str = ""
     anthropic_api_key: str = ""
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
     voyage_api_key: str = ""
     app_url: str = "http://localhost:3000"
     api_url: str = "http://localhost:8000"
